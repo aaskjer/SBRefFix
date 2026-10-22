@@ -6,6 +6,7 @@ Drop a `.sb` file on `Fix-Export.cmd` and the reference paths inside it are rewr
 compiles wherever Streamer.bot happens to be installed. Nothing to install: a folder, Windows PowerShell
 5.1, done.
 
+## Why it's needed
 
 The trouble is that an export stores framework references **relative to the exporting Streamer.bot
 folder**:
@@ -60,6 +61,8 @@ fixed even when one of them cannot be; `-Strict` turns that into all or nothing.
 Run it on the export you are about to publish, not on the one you just imported.
 
 ## Checking a change
+
+After changing `Fix-SBExport.ps1`, run the tests:
 
 ```
 powershell -ExecutionPolicy Bypass -File Test-FixSBExport.ps1

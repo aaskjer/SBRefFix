@@ -28,7 +28,7 @@ because it is relative, and making it absolute would break it for everybody else
 
 ## How to use it
 
-Double-click or drag files onto:
+Download the whole project as .ZIP, extract it somewhere, double-click or drag files onto:
 
 | | |
 | --- | --- |

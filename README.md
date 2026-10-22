@@ -35,11 +35,6 @@ shallower folder still works by accident; deeper or on another drive it turns in
 in `E:\STREAMING\Streamerbot` reads the line above as `E:\STREAMING\Windows\...`, finds nothing, and drops
 the reference.
 
-It gets worse. Almost every action also references `.\Newtonsoft.Json.dll`, which *does* resolve - so one
-reference survives, the "nothing left" branch never runs, and `mscorlib` is never added either. The action
-fails with `Predefined type 'System.Object' is not defined`, which looks like a broken script rather than a
-broken path.
-
 Streamer.bot's own **Find Refs** button appends absolute `C:\Windows\...` entries but leaves the broken
 relative ones in place, so the error lines keep coming even after the action compiles again.
 

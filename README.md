@@ -53,18 +53,6 @@ It opens the export, rewrites the reference strings that would not survive the t
 So not everything becomes absolute. A reference inside the Streamer.bot folder is portable precisely
 because it is relative, and making it absolute would break it for everybody else.
 
-A reference counts as "a DLL that sits in the Streamer.bot folder" when it is one of the four built-ins,
-when the same export references that name relatively somewhere else, or when you passed `-SbFolder` and the
-file is in there.
-
-Nothing else in the export changes. A reference string is replaced only where it stands in a `references`
-list, the result is read back and compared reference by reference, and the repacked file is unpacked again
-and compared to the rewritten JSON before a single byte is written. An export that is already portable is
-not rewritten at all, and a file that is overwritten is copied to `<name>.sb.bak` first.
-
-Absolute paths that are **not** references - a sound file, a folder, a database on your PC - are listed as
-a note. Those cannot be repaired from here; whoever imports the export has to point them somewhere real.
-
 ## How to use it
 
 Double-click or drag files onto:

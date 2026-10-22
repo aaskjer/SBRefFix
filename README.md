@@ -102,7 +102,5 @@ JSON can be rewritten and packed up again.
 
 ## Where this comes from
 
-The behaviour above was read out of `Streamer.bot.exe` 1.0.7 and confirmed by real imports: an export that
-failed to compile in a Streamer.bot five folders deep imported and compiled cleanly in the same place after
-the rewrite. The tool grew out of [TwitchSentry](https://github.com/aaskjer/TwitchSentry), which ships its
+The behaviour above was read out of `Streamer.bot.exe` v1.0.7. The tool grew out of [TwitchSentry](https://github.com/aaskjer/TwitchSentry), which ships its
 releases through it.

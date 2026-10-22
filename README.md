@@ -6,21 +6,6 @@ Drop a `.sb` file on `Fix-Export.cmd` and the reference paths inside it are rewr
 compiles wherever Streamer.bot happens to be installed. Nothing to install: a folder, Windows PowerShell
 5.1, done.
 
-## Why it's needed
-
-You export an action, it imports fine for you and for half the people who try it. The other half get an
-action that compiles into nothing - and often they do not even get an error on screen, only a line in the
-Streamer.bot log.
-
-The reason is how Streamer.bot 1.0.7 stores and resolves the reference list of a C# sub-action:
-
-- A rooted path such as `C:\Windows\...` is used exactly as written.
-- A relative path is combined with the Streamer.bot folder **of the PC doing the import**.
-- A reference it cannot find is dropped silently. There is no lookup by file name and no GAC search, only
-  an `ERR Unable to locate reference: <path>` line in the log.
-- `mscorlib` is added back **only when no reference survived at all**. Then four entries from its own
-  folder are always appended: `Streamer.bot.Plugin.Interface.dll`, `Streamer.bot.Common.dll`,
-  `Newtonsoft.Json.dll`, `Twitch.Common.dll`. No `System.dll`, no `System.Core.dll`.
 
 The trouble is that an export stores framework references **relative to the exporting Streamer.bot
 folder**:
@@ -38,19 +23,7 @@ the reference.
 Streamer.bot's own **Find Refs** button appends absolute `C:\Windows\...` entries but leaves the broken
 relative ones in place, so the error lines keep coming even after the action compiles again.
 
-## What it does
-
-It opens the export, rewrites the reference strings that would not survive the trip, and writes it back:
-
-| in the export | becomes | why |
-| --- | --- | --- |
-| `..\..\Windows\...` | `%SystemRoot%\...` of this PC | a rooted path is used as written |
-| `D:\Windows\...` while this PC has Windows elsewhere | `%SystemRoot%\...` of this PC | absolute is not the same as correct |
-| `C:\Users\Bob\Streamer.bot\Newtonsoft.Json.dll` | `.\Newtonsoft.Json.dll` | it resolves in every install's own folder |
-| `.\Newtonsoft.Json.dll`, `Twitch.Common.dll` | left alone | already portable |
-| `E:\Tools\Mine\Custom.dll` | left alone, reported | only your PC can say where that is |
-
-So not everything becomes absolute. A reference inside the Streamer.bot folder is portable precisely
+SBRefFix rewrites the reference strings that would not survive the trip, and writes it back. So not everything becomes absolute. A reference inside the Streamer.bot folder is portable precisely
 because it is relative, and making it absolute would break it for everybody else.
 
 ## How to use it
@@ -91,16 +64,3 @@ Run it on the export you are about to publish, not on the one you just imported.
 ```
 powershell -ExecutionPolicy Bypass -File Test-FixSBExport.ps1
 ```
-
-31 assertions over synthetic exports: every kind of path, `-Check`, `-Strict`, `-OutDir`, backups, running
-twice, a file that is not an export, and a whole folder at once.
-
-## The file format
-
-A `.sb` export is Base64 of the four bytes `SBAE` followed by gzipped JSON. There is no checksum, so the
-JSON can be rewritten and packed up again.
-
-## Where this comes from
-
-The behaviour above was read out of `Streamer.bot.exe` v1.0.7. The tool grew out of [TwitchSentry](https://github.com/aaskjer/TwitchSentry), which ships its
-releases through it.

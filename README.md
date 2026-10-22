@@ -18,7 +18,7 @@ folder**:
 Those `..\` are counted from the importer's folder, so the path only means the same thing when their
 Streamer.bot sits exactly as deep on the same drive as yours. A `..` past the drive root is ignored, so a
 shallower folder still works by accident; deeper or on another drive it turns into nonsense. A Streamer.bot
-in `E:\STREAMING\Streamerbot` reads the line above as `E:\STREAMING\Windows\...`, finds nothing, and drops
+in `E:\Streaming\Streamer.bot` reads the line above as `E:\Streaming\Windows\...`, finds nothing, and drops
 the reference.
 
 Streamer.bot's own **Find Refs** button appends absolute `C:\Windows\...` entries but leaves the broken

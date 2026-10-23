@@ -67,3 +67,7 @@ After changing `Fix-SBExport.ps1`, run the tests:
 ```
 powershell -ExecutionPolicy Bypass -File Test-FixSBExport.ps1
 ```
+
+## Links
+
+[aaskjer on Twitch](https://twitch.tv/aaskjer) · [aaskjer.github.io](https://aaskjer.github.io/)

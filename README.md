@@ -2,12 +2,6 @@
 
 Makes the .NET references in a Streamer.bot export work on everyone else's PC.
 
-Drop a `.sb` file on `Fix-Export.cmd` and the reference paths inside it are rewritten so the import
-compiles wherever Streamer.bot happens to be installed. Nothing to install: a folder, Windows PowerShell
-5.1, done.
-
-## Why it's needed
-
 The trouble is that an export stores framework references **relative to the exporting Streamer.bot
 folder**:
 

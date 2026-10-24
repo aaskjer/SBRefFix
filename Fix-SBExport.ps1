@@ -9,7 +9,9 @@ param(
     [switch] $NoBackup,
     [switch] $Strict,
     [switch] $Watch,
-    [switch] $Recurse
+    [switch] $Recurse,
+    [switch] $Clipboard,
+    [switch] $ImportString
 )
 
 $ErrorActionPreference = 'Stop'
@@ -37,6 +39,10 @@ function ConvertFrom-Export([string] $text, [string] $name) {
     $plain = [System.IO.MemoryStream]::new()
     try { $gzip.CopyTo($plain) } catch { throw "$name is not a Streamer.bot export: its content is not gzip." } finally { $gzip.Dispose() }
     $json = $plain.ToArray()
+    # gzip ends on the unpacked length, so a string cut short or with other text stuck to its end shows here.
+    if ([BitConverter]::ToUInt32($bytes, $bytes.Length - 4) -ne $json.Length) {
+        throw "$name is not a whole Streamer.bot export: it is cut short, or other text is stuck to its end."
+    }
     $bom = $json.Length -ge 3 -and $json[0] -eq 0xEF -and $json[1] -eq 0xBB -and $json[2] -eq 0xBF
     $start = 0
     if ($bom) { $start = 3 }
@@ -53,6 +59,75 @@ function ConvertTo-Export([string] $json, [bool] $bom) {
     $gzip.Dispose()
     return [Convert]::ToBase64String($packed.ToArray())
 }
+
+# ---------------------------------------------------------------- import strings in text
+
+$importStart = [regex] '(?<![A-Za-z0-9+/=])U0JBR'   # SBAE in Base64
+$importFirst = [regex] '\G[A-Za-z0-9+/]*=*'
+$importNext = [regex] '\G[ \t]*(\r?\n)([ \t]*)([A-Za-z0-9+/]+=*)[ \t]*(?=\r?\n|$)'
+
+function Test-TextFile([string] $file) { return ([System.IO.Path]::GetExtension($file) -in @('.txt', '.md')) }
+
+# A text file as characters that write back to the very same bytes: UTF-16 by its byte order mark, anything
+# else byte for byte, which leaves UTF-8 and ANSI text around the import string untouched.
+function Read-TextFile([string] $file) {
+    $bytes = [System.IO.File]::ReadAllBytes($file)
+    $encoding = [System.Text.Encoding]::GetEncoding(28591)
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { $encoding = New-Object System.Text.UnicodeEncoding $false, $false }
+    elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) { $encoding = New-Object System.Text.UnicodeEncoding $true, $false }
+    return @{ Text = $encoding.GetString($bytes); Encoding = $encoding }
+}
+
+# Every Base64 block starting with U0JBR that is long enough to be an export. A block may be wrapped over
+# many lines; it ends at a line that is not Base64, after padding, or after a line shorter than the ones above.
+function Get-ImportBlocks([string] $text) {
+    $blocks = @()
+    $at = 0
+    while (($start = $importStart.Match($text, $at)).Success) {
+        $line = $importFirst.Match($text, $start.Index).Value
+        $end = $start.Index + $line.Length
+        $base64 = [System.Text.StringBuilder]::new($line)
+        $lines = 1
+        $width = $line.Length
+        $newline = "`n"
+        $indent = ''
+        while (-not $line.EndsWith('=')) {
+            $next = $importNext.Match($text, $end)
+            if (-not $next.Success) { break }
+            $line = $next.Groups[3].Value
+            if ($lines -eq 1) { $newline = $next.Groups[1].Value; $indent = $next.Groups[2].Value }
+            [void] $base64.Append($line)
+            $lines++
+            $end = $next.Groups[3].Index + $line.Length
+            if ($line.Length -lt $width) { break }
+            $width = $line.Length
+        }
+        $at = $end
+        # Shorter than the smallest gzip stream: the start of a string quoted in prose, not an export.
+        if ($base64.Length -lt 32) { continue }
+        if ($lines -eq 1) { $width = 0 }
+        $blocks += @{ Start = $start.Index; End = $end; Base64 = $base64.ToString(); Width = $width; Newline = $newline; Indent = $indent }
+    }
+    return ,$blocks
+}
+
+function Find-ImportString([string] $text, [string] $name) {
+    $blocks = Get-ImportBlocks $text
+    if ($blocks.Count -eq 0) { throw "$name holds no Streamer.bot import string: nothing in it starts with U0JBR." }
+    if ($blocks.Count -gt 1) { throw "$name holds $($blocks.Count) import strings; give SBRefFix one at a time." }
+    return $blocks[0]
+}
+
+# The repaired string laid out like the one it replaces: on one line, or wrapped at the same width.
+function Format-ImportString([string] $base64, $block) {
+    if ($block.Width -eq 0) { return $base64 }
+    $lines = for ($i = 0; $i -lt $base64.Length; $i += $block.Width) { $base64.Substring($i, [Math]::Min($block.Width, $base64.Length - $i)) }
+    return ($lines -join ($block.Newline + $block.Indent))
+}
+
+# Wrapped, so the tests can put a file in place of the clipboard.
+function Get-ClipboardText { return (Get-Clipboard -Raw) }
+function Set-ClipboardText([string] $text) { Set-Clipboard -Value $text }
 
 # Every string in a references list, with the action it belongs to, in document order.
 function Get-References([string] $json) {
@@ -161,18 +236,17 @@ function Get-AuthorPaths([string] $json) {
     return ,$hits
 }
 
-# ---------------------------------------------------------------- one file
+# ---------------------------------------------------------------- one export
 
-function Repair-Export([string] $file, [string] $target) {
-    $name = Split-Path -Leaf $file
-    $raw = [System.IO.File]::ReadAllText($file)
-    $export = ConvertFrom-Export $raw $name
+# Checks one export and repairs what it can. Encoded is the repaired export, or missing when there is nothing to write.
+function Repair-Export([string] $base64, [string] $name) {
+    $export = ConvertFrom-Export $base64 $name
     $refs = Get-References $export.Json
     $actions = @($refs | ForEach-Object { $_.Action } | Select-Object -Unique).Count
     Write-Host "$name - $($refs.Count) references in $actions actions"
     if ($refs.Count -eq 0) {
         Write-Host '  ok   no C# references in this export; nothing to do' -ForegroundColor Green
-        return $true
+        return @{ Ok = $true }
     }
 
     $localNames = Get-LocalNames $refs
@@ -208,20 +282,20 @@ function Repair-Export([string] $file, [string] $target) {
             if (-not $hit) { $hit = 0 }
             $hit = $hit + $bad.Count
             Write-Host "  FAIL $hit of $($refs.Count) references would not hold on another PC" -ForegroundColor Red
-            return $false
+            return @{ Ok = $false }
         }
         Write-Host '  ok   every reference holds wherever Streamer.bot is installed' -ForegroundColor Green
-        return $true
+        return @{ Ok = $true }
     }
 
     if ($bad.Count -gt 0 -and $Strict) { throw 'nothing written (-Strict): the references above cannot be repaired here.' }
     if ($fixes.Count -eq 0) {
         if ($bad.Count -gt 0) {
             Write-Host '  FAIL nothing written: no reference can be repaired here' -ForegroundColor Red
-            return $false
+            return @{ Ok = $false }
         }
         Write-Host '  ok   every reference already holds wherever Streamer.bot is installed; nothing written' -ForegroundColor Green
-        return $true
+        return @{ Ok = $true }
     }
 
     $json = $export.Json
@@ -247,6 +321,49 @@ function Repair-Export([string] $file, [string] $target) {
     $back = ConvertFrom-Export $encoded $name
     if ($back.Json -cne $json -or $back.Bom -ne $export.Bom) { throw 'nothing written: the packed export does not unpack to the rewritten JSON.' }
 
+    return @{
+        Ok = ($bad.Count -eq 0)
+        Encoded = $encoded
+        Total = ($perAction.Values | Measure-Object -Sum).Sum
+        Actions = $perAction.Count
+        Bad = $bad.Count
+        Missing = @($fixes.Values | Select-Object -Unique | Where-Object { $_ -notlike '.\*' -and -not (Test-Path -LiteralPath $_) })
+    }
+}
+
+function Show-Repaired($result, [string] $where) {
+    foreach ($m in $result.Missing) { Write-Host "  note: not on this PC: $m" -ForegroundColor DarkYellow }
+    Write-Host "  ok   $($result.Total) references repaired in $($result.Actions) actions; $where" -ForegroundColor Green
+    if ($result.Bad -gt 0) { Write-Host "  FAIL $($result.Bad) references above are still broken; they point outside Windows and this PC cannot say where" -ForegroundColor Red }
+}
+
+# ---------------------------------------------------------------- one file, or the clipboard
+
+# A .sb file is the export and nothing else; a .txt or .md file holds it somewhere in its text.
+function Repair-File([string] $file, [string] $target) {
+    $name = Split-Path -Leaf $file
+    if (Test-TextFile $file) {
+        $source = Read-TextFile $file
+        $block = Find-ImportString $source.Text $name
+        $result = Repair-Export $block.Base64 $name
+        if (-not $result.Encoded) { return $result.Ok }
+        $before = $source.Text.Substring(0, $block.Start)
+        $after = $source.Text.Substring($block.End)
+        $text = $before + (Format-ImportString $result.Encoded $block) + $after
+        $again = Find-ImportString $text $name
+        if ($again.Base64 -cne $result.Encoded -or $again.Start -ne $block.Start -or $text.Substring($again.End) -cne $after) {
+            throw 'nothing written: the rewritten text does not read back as the repaired import string with the text around it unchanged.'
+        }
+        $bytes = $source.Encoding.GetBytes($text)
+    } else {
+        $raw = [System.IO.File]::ReadAllText($file)
+        $result = Repair-Export $raw $name
+        if (-not $result.Encoded) { return $result.Ok }
+        $tail = ''
+        if ($raw -match '(\r?\n)+$') { $tail = $Matches[0] }
+        $bytes = [System.Text.Encoding]::ASCII.GetBytes($result.Encoded + $tail)
+    }
+
     if (-not $NoBackup -and $target -ieq $file) {
         $bak = "$file.bak"
         $n = 2
@@ -254,16 +371,31 @@ function Repair-Export([string] $file, [string] $target) {
         Copy-Item -LiteralPath $file -Destination $bak
         Write-Host "  kept the original as $(Split-Path -Leaf $bak)"
     }
-    $tail = ''
-    if ($raw -match '(\r?\n)+$') { $tail = $Matches[0] }
-    [System.IO.File]::WriteAllText($target, $encoded + $tail, [System.Text.Encoding]::ASCII)
+    [System.IO.File]::WriteAllBytes($target, $bytes)
+    if ($ImportString) {
+        $leaf = [System.IO.Path]::GetFileNameWithoutExtension($target) -replace '(?i)\.import$', ''
+        $importFile = Join-Path (Split-Path -Parent $target) "$leaf.import.txt"
+        # Repairing x.import.txt already wrote the import string.
+        if ($importFile -ine $target) {
+            [System.IO.File]::WriteAllText($importFile, $result.Encoded, [System.Text.Encoding]::ASCII)
+            Write-Host "  import string on one line in $(Split-Path -Leaf $importFile)"
+        }
+    }
+    Show-Repaired $result "written to $target"
+    return $result.Ok
+}
 
-    $missing = @($fixes.Values | Select-Object -Unique | Where-Object { $_ -notlike '.\*' -and -not (Test-Path -LiteralPath $_) })
-    foreach ($m in $missing) { Write-Host "  note: not on this PC: $m" -ForegroundColor DarkYellow }
-    $total = ($perAction.Values | Measure-Object -Sum).Sum
-    Write-Host "  ok   $total references repaired in $($perAction.Count) actions; written to $target" -ForegroundColor Green
-    if ($bad.Count -gt 0) { Write-Host "  FAIL $($bad.Count) references above are still broken; they point outside Windows and this PC cannot say where" -ForegroundColor Red }
-    return ($bad.Count -eq 0)
+function Repair-Clipboard {
+    $name = 'Clipboard'
+    $text = Get-ClipboardText
+    if ([string]::IsNullOrWhiteSpace($text)) { throw 'the clipboard holds no text: copy a Streamer.bot import string first.' }
+    $block = Find-ImportString $text $name
+    $result = Repair-Export $block.Base64 $name
+    if (-not $result.Encoded) { return $result.Ok }
+    Set-ClipboardText $result.Encoded
+    if ("$(Get-ClipboardText)".Trim() -cne $result.Encoded) { throw 'the clipboard does not read back as the repaired import string; do not paste it.' }
+    Show-Repaired $result 'the repaired import string is on the clipboard'
+    return $result.Ok
 }
 
 function Invoke-One([string] $file) {
@@ -274,7 +406,7 @@ function Invoke-One([string] $file) {
             if (-not (Test-Path -LiteralPath $OutDir)) { [void] (New-Item -ItemType Directory -Path $OutDir) }
             $target = Join-Path ((Resolve-Path -LiteralPath $OutDir).Path) (Split-Path -Leaf $full)
         }
-        return (Repair-Export $full $target)
+        return (Repair-File $full $target)
     } catch {
         Write-Host "  FAIL $(Split-Path -Leaf $file): $($_.Exception.Message)" -ForegroundColor Red
         return $false
@@ -283,21 +415,37 @@ function Invoke-One([string] $file) {
 
 # ---------------------------------------------------------------- what to work on
 
+# A file still being copied cannot be read yet; it counts once it can.
+function Test-HoldsImportString([string] $file) {
+    try { return ((Get-ImportBlocks (Read-TextFile $file).Text).Count -gt 0) } catch { return $false }
+}
+
+# .sb files, and the .txt and .md files that hold an import string; other text files are none of our business.
 function Get-Exports([string] $folder) {
-    $gci = @{ LiteralPath = $folder; Filter = '*.sb'; File = $true }
+    $gci = @{ LiteralPath = $folder; File = $true }
     if ($Recurse) { $gci['Recurse'] = $true }
-    return @(Get-ChildItem @gci | Sort-Object FullName)
+    $files = Get-ChildItem @gci | Where-Object { $_.Extension -ieq '.sb' -or ((Test-TextFile $_.Name) -and (Test-HoldsImportString $_.FullName)) }
+    return @($files | Sort-Object FullName)
 }
 
 $inbox = Join-Path $here 'Inbox'
 $ok = $true
+
+if ($Clipboard) {
+    if ($Path -or $OutDir -or $Watch) {
+        Write-Host '  FAIL -Clipboard works on the clipboard alone; leave out files, -OutDir and -Watch.' -ForegroundColor Red
+        exit 1
+    }
+    try { $ok = Repair-Clipboard } catch { Write-Host "  FAIL $($_.Exception.Message)" -ForegroundColor Red; $ok = $false }
+    if ($ok) { exit 0 } else { exit 1 }
+}
 
 if ($Watch) {
     if (-not (Test-Path -LiteralPath $inbox)) { [void] (New-Item -ItemType Directory -Path $inbox) }
     $fixed = Join-Path $here 'Fixed'
     $originals = Join-Path $here 'Originals'
     Write-Host "Watching $inbox" -ForegroundColor Cyan
-    Write-Host 'Drop Streamer.bot exports (.sb) in there. Repaired files land in Fixed\, the originals in Originals\.'
+    Write-Host 'Drop Streamer.bot exports (.sb) or import strings (.txt, .md) in there. Repaired files land in Fixed\, the originals in Originals\.'
     Write-Host 'Press Ctrl+C to stop.'
     $sizes = @{}
     while ($true) {
@@ -312,7 +460,7 @@ if ($Watch) {
             $n = 2
             while (Test-Path -LiteralPath $out) { $out = Join-Path $fixed ("{0}.{1}{2}" -f [System.IO.Path]::GetFileNameWithoutExtension($file.Name), $n, $file.Extension); $n++ }
             $done = $false
-            try { $done = (Repair-Export $file.FullName $out) } catch { Write-Host "  FAIL $($_.Exception.Message)" -ForegroundColor Red }
+            try { $done = (Repair-File $file.FullName $out) } catch { Write-Host "  FAIL $($_.Exception.Message)" -ForegroundColor Red }
             if (Test-Path -LiteralPath $out) {
                 $keep = Join-Path $originals $file.Name
                 $n = 2
@@ -333,7 +481,7 @@ if (-not $Path -or $Path.Count -eq 0) {
     if (-not (Test-Path -LiteralPath $inbox)) { [void] (New-Item -ItemType Directory -Path $inbox) }
     $targets = @(Get-Exports $inbox | ForEach-Object { $_.FullName })
     if ($targets.Count -eq 0) {
-        Write-Host "Nothing to do: drop Streamer.bot exports (.sb) into $inbox, or drag them onto Fix-Export.cmd." -ForegroundColor Cyan
+        Write-Host "Nothing to do: drop Streamer.bot exports (.sb) or import strings (.txt, .md) into $inbox, or drag them onto Fix-Export.cmd." -ForegroundColor Cyan
         exit 0
     }
 } else {

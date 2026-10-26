@@ -2,7 +2,7 @@
 
 Makes the .NET references in a Streamer.bot export work on everyone else's PC.
 
-The trouble is that an export stores framework references **relative to the exporting Streamer.bot
+The trouble is that an export on v1.0.7 stores framework references **relative to the exporting Streamer.bot
 folder**:
 
 ```

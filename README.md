@@ -23,7 +23,7 @@ because it is relative, and making it absolute would break it for everybody else
 
 ## How to use it
 
-Download the whole project as .ZIP, extract it somewhere, double-click or drag files onto:
+Download **[`SBRefFix.zip`](https://github.com/aaskjer/SBRefFix/releases/latest/download/SBRefFix.zip)** from the [latest release](https://github.com/aaskjer/SBRefFix/releases/latest), extract it somewhere, double-click or drag files onto:
 
 | | |
 | --- | --- |

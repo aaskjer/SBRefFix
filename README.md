@@ -1,84 +1,91 @@
-# SBRefFix
+<h1 align="center">SBRefFix</h1>
 
-Makes the .NET references in a Streamer.bot export work on everyone else's PC.
+<p align="center">
+  <b>Rewrites the C# assembly references in a Streamer.bot export so they resolve on any PC.</b>
+</p>
 
-The trouble is that an export stores framework references **relative to the exporting Streamer.bot
-folder**:
+<p align="center">
+  <img src="https://img.shields.io/badge/tool-streamer.bot-0b73ff" alt="Streamer.bot">
+  <img src="https://img.shields.io/github/license/aaskjer/SBRefFix" alt="License">
+  <img src="https://img.shields.io/github/v/release/aaskjer/SBRefFix" alt="Release">
+  <img src="https://img.shields.io/github/downloads/aaskjer/SBRefFix/total" alt="Downloads">
+</p>
+
+<p align="center">
+  <a href="https://github.com/aaskjer/SBRefFix/releases/latest"><b>Download</b></a> &nbsp;·&nbsp;
+  <a href="Setup-Guide.md"><b>Setup Guide</b></a>
+</p>
+
+---
+
+## Problem
+
+Streamer.bot 1.0.7 stores the references of C# sub-actions relative to its own folder. Exported from
+`C:\Users\you\Desktop\Streamer.bot`, a framework reference reads:
 
 ```
 ..\..\..\..\Windows\Microsoft.NET\Framework64\v4.0.30319\System.dll
 ```
 
-Those `..\` are counted from the importer's folder, so the path only means the same thing when their
-Streamer.bot sits exactly as deep on the same drive as yours. A `..` past the drive root is ignored, so a
-shallower folder still works by accident; deeper or on another drive it turns into nonsense. A Streamer.bot
-in `E:\Streaming\Streamer.bot` reads the line above as `E:\Streaming\Windows\...`, finds nothing, and drops
-the reference.
+The importing Streamer.bot resolves the `..\` against its own folder. A `..` above the drive root is dropped:
 
-Streamer.bot's own **Find Refs** button appends absolute `C:\Windows\...` entries but leaves the broken
-relative ones in place, so the error lines keep coming even after the action compiles again.
+| Importer's folder | Resolves to | |
+| --- | --- | --- |
+| `C:\Streamer.bot` | `C:\Windows\...\System.dll` | found, by accident |
+| `D:\Streamer.bot` | `D:\Windows\...\System.dll` | missing |
+| `C:\Users\you\Documents\Tools\Streamer.bot` | `C:\Users\Windows\...\System.dll` | missing |
 
-SBRefFix rewrites the reference strings that would not survive the trip, and writes it back. So not everything becomes absolute. A reference inside the Streamer.bot folder is portable precisely
-because it is relative, and making it absolute would break it for everybody else.
+A missing reference is dropped. **Find Refs** adds absolute `C:\Windows\...` entries but keeps the broken
+relative ones, which go on producing errors.
 
-## How to use it
+## Rules
 
-Download the whole project as .ZIP, extract it somewhere, double-click or drag files onto:
+SBRefFix judges every string in a `references` list and rewrites only paths that depend on the exporting
+PC's folder layout:
 
-| | |
+| Reference | Result |
 | --- | --- |
-| `Fix-Clipboard.cmd` | copy an import string, double-click, paste the repaired one into Streamer.bot |
-| `Fix-Export.cmd` | drag `.sb`, `.txt` or `.md` files onto it, or double-click to do everything lying in `Inbox\` |
-| `Check-Export.cmd` | the same, but reports only and writes nothing |
-| `Watch-Inbox.cmd` | keeps watching `Inbox\`: repaired files land in `Fixed\`, the originals in `Originals\` |
+| `Foo.dll`, `.\Foo.dll`, `lib\Foo.dll` | kept: relative inside the Streamer.bot folder, portable as is |
+| `C:\Windows\...` on the local Windows drive | kept |
+| `..\..\Windows\...`, `\Windows\...`, `X:\Windows\...` on another drive | `%SystemRoot%\...` |
+| `..\...\Foo.dll` or `X:\...\Foo.dll`, where `Foo.dll` is a local DLL | `.\Foo.dll` |
+| any other path that is rooted or climbs out of the folder | `FAIL`, unchanged |
+| `\\server\...`, a `..` midway, an empty string | `FAIL`, unchanged |
 
-It takes an export in any of these forms:
+`%SystemRoot%` is taken from the PC running SBRefFix, normally `C:\Windows`. A local DLL is one of
+`Streamer.bot.Plugin.Interface.dll`, `Streamer.bot.Common.dll`, `Newtonsoft.Json.dll`, `Twitch.Common.dll`,
+any DLL the same export references by bare file name, and with `-SbFolder` every `*.dll` in that folder.
 
-- a `.sb` file, as Streamer.bot exports it
-- a `.txt` or `.md` file holding an import string, such as an `Import-String.md` with a heading, badges and
-  the string in a code block. The string is the block of text starting with `U0JBR`, on one line or wrapped
-  over many. Only that block is replaced: the text around it stays as it was, and a wrapped string is
-  wrapped again at the same width.
-- the clipboard, with `Fix-Clipboard.cmd` or `-Clipboard`. The repaired string goes back onto the clipboard
-  on one line; when nothing needs repairing, the clipboard is left alone.
+## Processing
 
-Or from a shell:
+1. **Decode.** An export is Base64 over the 4-byte magic `SBAE` (Base64 `U0JBR...`), followed by a gzip
+   stream of UTF-8 JSON, optionally with BOM. The gzip trailer's length field must match the unpacked size;
+   a truncated string or trailing text fails here.
+2. **Collect.** The JSON is parsed; each string in a `references` array is recorded with the name of the
+   action it belongs to.
+3. **Rewrite.** Each affected reference is replaced as a JSON string literal in the original JSON text. The
+   JSON is not re-serialized, so key order, formatting and all other values stay byte-identical.
+4. **Encode.** Magic, gzip and BOM as in the input.
 
-```
-powershell -ExecutionPolicy Bypass -File Fix-SBExport.ps1 <file.sb> [<Import-String.md> ...]
-powershell -ExecutionPolicy Bypass -File Fix-SBExport.ps1 <folder> -Recurse
-powershell -ExecutionPolicy Bypass -File Fix-SBExport.ps1 -Clipboard
-```
+Nothing is written if one of these checks fails:
 
-| switch | |
-| --- | --- |
-| `-Check` | report only, write nothing |
-| `-OutDir <dir>` | write the result there instead of over the input |
-| `-NoBackup` | do not keep a `.bak` next to an overwritten file |
-| `-Strict` | write nothing unless every reference can be repaired |
-| `-ImportString` | also write the repaired export as an import string on one line, `<name>.import.txt`, next to the repaired file |
-| `-Clipboard` | repair the import string on the clipboard instead of files |
-| `-SbFolder <dir>` | a Streamer.bot folder, so rooted paths into it can be made relative |
-| `-Recurse` | with a folder: its subfolders too |
-| `-Watch` | keep watching `Inbox\` |
+- an affected string occurs in the JSON more often than in `references` lists, e.g. inside C# code
+- the rewritten JSON yields a different number of references, or one differs from its expected value
+- a rewritten reference does not pass the rules as kept
+- the re-encoded export does not decode back to the rewritten JSON
+- the written text file or clipboard does not read back as the repaired string
 
-A folder, `Inbox\` and `-Watch` take every `.sb` file, and every `.txt` or `.md` file that holds an import
-string; other text files are skipped.
+## Not handled
 
-Exit code 0 means every reference now holds wherever Streamer.bot is installed. Exit code 1 means something
-is still broken, and the lines starting with `FAIL` say what. By default the repairable references are
-fixed even when one of them cannot be; `-Strict` turns that into all or nothing.
+- Rooted paths outside Windows (`D:\Libs\Foo.dll`) to DLLs that are not local: no path on another PC can be
+  derived from them. They are reported and left as they are.
+- Absolute paths in other fields, such as file paths in sub-actions, are listed as `note:` and not changed.
+- A rewritten Windows path missing on the PC running SBRefFix is listed as `note: not on this PC`.
 
-Run it on the export you are about to publish, not on the one you just imported.
+---
 
-## Checking a change
+## Credits
 
-After changing `Fix-SBExport.ps1`, run the tests:
-
-```
-powershell -ExecutionPolicy Bypass -File Test-FixSBExport.ps1
-```
-
-## Links
-
-[aaskjer on Twitch](https://twitch.tv/aaskjer) · [aaskjer.github.io](https://aaskjer.github.io/)
+- **Author:** [aaskjer on Twitch](https://twitch.tv/aaskjer) · [aaskjer.github.io](https://aaskjer.github.io/)
+- **Built for:** [Streamer.bot](https://streamer.bot) by [nate1280](https://www.patreon.com/c/nate1280/home)
+- **Thanks:** YOU ♡

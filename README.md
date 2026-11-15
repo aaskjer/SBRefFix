@@ -9,6 +9,7 @@
   <img src="https://img.shields.io/github/license/aaskjer/SBRefFix" alt="License">
   <img src="https://img.shields.io/github/v/release/aaskjer/SBRefFix" alt="Release">
   <img src="https://img.shields.io/github/downloads/aaskjer/SBRefFix/total" alt="Downloads">
+  <img src="https://img.shields.io/github/stars/aaskjer/SBRefFix" alt="Stars">
 </p>
 
 <p align="center">
